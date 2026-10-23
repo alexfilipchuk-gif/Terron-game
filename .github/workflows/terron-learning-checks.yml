@@ -1,0 +1,116 @@
+# Added for TERRON development validation, 2026-10-23. AGPL-3.0.
+# This is bounded CI, not an always-on training service or a rollout provider.
+name: TERRON learning prerequisites
+run-name: TERRON checks ${{ inputs.request_id || github.event.pull_request.number }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: Unique diagnostic request ID; no model/data URLs
+        type: string
+        required: true
+  pull_request:
+    paths:
+      - .github/workflows/terron-learning-checks.yml
+      - docs/learning-ci.md
+      - src/core/**
+      - tests/**
+      - package.json
+      - package-lock.json
+      - vite.config.ts
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terron-learning-checks-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-checks:
+    # Standard public-repository Linux runners only. A private copy must get a
+    # separately reviewed free-budget policy before this guard is changed.
+    if: github.repository == 'alexfilipchuk-gif/Terron-game' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        suite: [mechanics, native-bots, navigation]
+    env:
+      CI: 'true'
+      HUSKY: '0'
+      SKIP_BROWSER_OPEN: 'true'
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - name: Checkout public project, without stored credentials or submodules
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+      - name: Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Install locked public dependencies, without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run bounded native-mechanics prerequisites
+        shell: bash
+        env:
+          SUITE: ${{ matrix.suite }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          case "$SUITE" in
+            mechanics)
+              files=(tests/Attack.test.ts tests/TerritoryCapture.test.ts tests/ConquerGold.test.ts tests/economy/ConstructionGold.test.ts tests/UltimateChoice.test.ts tests/UltimateWiring.test.ts)
+              ;;
+            native-bots)
+              files=(tests/NationCreation.test.ts tests/NationStructureBehavior.test.ts tests/NationAirBehavior.test.ts tests/NationMIRV.test.ts tests/AiAttackBehavior.test.ts)
+              ;;
+            navigation)
+              files=(tests/core/pathfinding/PathFinding.Water.test.ts tests/core/pathfinding/PathFinding.Air.test.ts tests/core/pathfinding/PathFinding.Rail.test.ts tests/core/pathfinding/WaterComponents.test.ts tests/core/game/GameImpl.test.ts)
+              ;;
+            *) exit 2 ;;
+          esac
+          original_head=$(git rev-parse HEAD)
+          set +e
+          ./node_modules/.bin/vitest run "${files[@]}" --maxWorkers=2
+          head_result=$?
+          set -e
+          # A red check is preserved. If only the CI/docs changed, repeat a
+          # failing suite on the PR base using the identical locked dependencies
+          # to distinguish existing source failures from workflow regressions.
+          if [[ "$head_result" -ne 0 && -n "$BASE_SHA" ]]; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+            if git diff --quiet "$BASE_SHA" "$original_head" -- src tests resources package.json package-lock.json vite.config.ts tsconfig.json .swcrc; then
+              echo "Baseline comparison: identical test inputs at $BASE_SHA"
+              git checkout --detach "$BASE_SHA"
+              set +e
+              ./node_modules/.bin/vitest run "${files[@]}" --maxWorkers=2
+              base_result=$?
+              set -e
+              git checkout --detach "$original_head"
+              echo "Head exit: $head_result; baseline exit: $base_result" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo 'Baseline not rerun: source/dependency inputs differ.' >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+          exit "$head_result"
+      - name: Report scope and exact source revision
+        if: always()
+        shell: bash
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: |
+          {
+            echo '### TERRON prerequisite validation'
+            echo "Suite: $SUITE"
+            echo "Checkout commit: $(git rev-parse HEAD)"
+            echo 'Diagnostic tests only; no model weights, trajectories or player archives uploaded.'
+            echo 'No learning update, promotion, speedrun result or simulator/replay parity is established by this job.'
+            echo 'Standard public Linux runner; maximum 15 minutes; at most 3 parallel CI jobs.'
+          } >> "$GITHUB_STEP_SUMMARY"
