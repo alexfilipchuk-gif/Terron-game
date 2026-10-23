@@ -20,7 +20,7 @@ worker, import demonstrations, upload private training inputs, or mutate a model
 
 ## Run and read results
 
-After merge, use **Actions → TERRON learning prerequisites → Run workflow**.
+After merge, use **Actions â†’ TERRON learning prerequisites â†’ Run workflow**.
 Supply a unique diagnostic `request_id`. Pull requests touching the workflow,
 native core or tests also run the bounded suites. A local deployment adapter can
 submit a manually requested check through existing GitHub CLI authentication.
@@ -28,6 +28,10 @@ submit a manually requested check through existing GitHub CLI authentication.
 Results and logs are in GitHub Actions. The job summary records the exact tested
 commit and suite. No artifacts are uploaded, so there is no trajectory or weight
 download/import step. Do not count these jobs as training matches or PPO samples.
+
+When a PR suite fails and its source/dependency inputs are identical to the base,
+the suite is repeated on the base commit. This comparison is reported separately;
+the original failing check stays red even when the same failure exists on base.
 
 These tests execute this repository's public source revision, **not** a frozen
 local TERRON training runtime. Passing them does not establish source parity,

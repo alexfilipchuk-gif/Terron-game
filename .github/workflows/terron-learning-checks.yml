@@ -61,6 +61,7 @@ jobs:
         shell: bash
         env:
           SUITE: ${{ matrix.suite }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           case "$SUITE" in
@@ -75,7 +76,30 @@ jobs:
               ;;
             *) exit 2 ;;
           esac
+          original_head=$(git rev-parse HEAD)
+          set +e
           ./node_modules/.bin/vitest run "${files[@]}" --maxWorkers=2
+          head_result=$?
+          set -e
+          # A red check is preserved. If only the CI/docs changed, repeat a
+          # failing suite on the PR base using the identical locked dependencies
+          # to distinguish existing source failures from workflow regressions.
+          if [[ "$head_result" -ne 0 && -n "$BASE_SHA" ]]; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+            if git diff --quiet "$BASE_SHA" "$original_head" -- src tests resources package.json package-lock.json vite.config.ts tsconfig.json .swcrc; then
+              echo "Baseline comparison: identical test inputs at $BASE_SHA"
+              git checkout --detach "$BASE_SHA"
+              set +e
+              ./node_modules/.bin/vitest run "${files[@]}" --maxWorkers=2
+              base_result=$?
+              set -e
+              git checkout --detach "$original_head"
+              echo "Head exit: $head_result; baseline exit: $base_result" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo 'Baseline not rerun: source/dependency inputs differ.' >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+          exit "$head_result"
       - name: Report scope and exact source revision
         if: always()
         shell: bash
